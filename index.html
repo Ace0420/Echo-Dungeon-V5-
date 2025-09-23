@@ -17,11 +17,11 @@
             width: 100vw;
             height: 100vh;
             background: #222;
-            border: none; /* Removed the border for a cleaner look */
+            border: none;
             cursor: pointer;
         }
         #micButton:active {
-            background: #444; /* Added a subtle color change on tap */
+            background: #444;
         }
         .listening {
             background: #004400 !important;
@@ -99,7 +99,7 @@
                 if (callback) setTimeout(callback, 2000);
             }
         }
-let recognition = null;
+        let recognition = null;
 
         function startListening() {
             if (!browserSupport.speechRecognition || !browserSupport.https) {
@@ -167,10 +167,17 @@ let recognition = null;
                 else speak('Please say WARRIOR, MAGE, or ROGUE');
                 return;
             }
-            if (command.includes('status')) characterStatus();
-            else if (command.includes('inventory')) listInventory();
-            else if (command.includes('help')) speak('Say STATUS, INVENTORY, or HELP');
-            else speak('Unknown command. Say HELP for options.');
+
+            if (!game.currentRoom) {
+                speak("I'm sorry, I seem to be lost. You can ask for status, inventory, or help.");
+            } else {
+                // Here's where the game logic would go
+                if (command.includes('status')) characterStatus();
+                else if (command.includes('inventory')) listInventory();
+                else if (command.includes('help')) speak('Say STATUS, INVENTORY, or HELP. You can also explore.');
+                else if (command.includes('explore')) exploreRoom();
+                else speak('Unknown command. Say HELP for options.');
+            }
         }
 
         function selectClass(className) {
@@ -184,7 +191,20 @@ let recognition = null;
             game.player.inventory = [...classData.items];
             game.needsClass = false;
             game.started = true;
-            speak(`You are now a ${classData.name}! Health: ${classData.health}, Gold: ${classData.gold}. Your adventure begins!`);
+            speak(`You are now a ${classData.name}! Health: ${classData.health}, Gold: ${classData.gold}. Your adventure begins!`, startAdventure);
+        }
+
+        function startAdventure() {
+            game.currentRoom = "entrance";
+            exploreRoom();
+        }
+
+        function exploreRoom() {
+            if (game.currentRoom === "entrance") {
+                speak("You are at the entrance to a dark dungeon. The air is cold and damp. You can hear the dripping of water somewhere ahead. You can say 'explore' or 'inventory'.");
+            } else {
+                speak("There is nothing of interest here. Try exploring.");
+            }
         }
 
         function characterStatus() {
@@ -205,6 +225,7 @@ let recognition = null;
     </script>
 </body>
 </html>
+
 
 
 
