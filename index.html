@@ -6,29 +6,28 @@
     <title>Voice Dungeon Explorer</title>
     <style>
         body {
-            margin: 0; padding: 0; background: #111;
-            display: flex; justify-content: center; align-items: center;
-            min-height: 100vh; font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #111;
         }
         #micButton {
-            width: 300px;
-            height: 300px;
-            border-radius: 50%;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
             background: #222;
-            border: 6px solid #fff;
+            border: none; /* Removed the border for a cleaner look */
             cursor: pointer;
-            transition: all 0.2s ease;
         }
         #micButton:active {
-            transform: scale(0.95);
+            background: #444; /* Added a subtle color change on tap */
         }
         .listening {
             background: #004400 !important;
-            border-color: #44ff44 !important;
         }
         .start-button {
             background: #000044 !important;
-            border-color: #4444ff !important;
         }
         /* Hide text display from view, but keep it for screen readers */
         #textDisplay {
@@ -206,6 +205,7 @@ let recognition = null;
     </script>
 </body>
 </html>
+
 
 
 
