@@ -4,81 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Voice Dungeon Explorer</title>
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            margin: 0; padding: 0; background: #111;
-            display: flex; justify-content: center; align-items: center;
-            min-height: 100vh; font-family: Arial, sans-serif;
-        }
-        .container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 600px; padding: 20px; }
-        .mic-button {
-            width: 300px; height: 300px; border-radius: 50%; background: #222; border: 6px solid #fff;
-            color: #ffffff; font-size: 24px; font-weight: bold; cursor: pointer;
-            display: flex; align-items: center; justify-content: center; flex-direction: column;
-            transition: all 0.2s ease; margin-bottom: 20px;
-        }
-        .mic-button:active { transform: scale(0.95); }
-        .mic-icon { font-size: 60px; margin-bottom: 15px; }
-        .listening { background: #004400 !important; border-color: #44ff44 !important; }
-        .start-button { background: #000044 !important; border-color: #4444ff !important; }
-        .text-display {
-            background: rgba(0,0,0,0.8); color: #fff; padding: 20px; border-radius: 10px;
-            min-height: 120px; width: 100%; margin-bottom: 20px; font-size: 16px;
-            line-height: 1.4; text-align: center; border: 2px solid #444;
-        }
-        #debug {
-            position: fixed; top: 10px; left: 10px; color: #fff; font-size: 11px;
-            background: rgba(0,0,0,0.9); padding: 10px; border-radius: 5px;
-            max-width: 300px; max-height: 200px; overflow-y: auto;
-            font-family: monospace; line-height: 1.3; border: 1px solid #444;
-        }
-        .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 10px; }
-        .control-btn {
-            background: #333; color: #fff; border: 1px solid #666; padding: 8px 16px;
-            border-radius: 5px; cursor: pointer; font-size: 14px; transition: all 0.2s;
-        }
-        .control-btn:hover { background: #555; border-color: #888; }
-    </style>
 </head>
 <body>
-    <div id="debug">Initializing Voice Dungeon Explorer...</div>
-
-    <div class="container">
-        <div id="textDisplay" class="text-display">
-            Welcome to Voice Dungeon Explorer!<br><br>
-            Click the button below to begin your audio adventure.<br>
-            Make sure to allow microphone permissions when prompted.
-        </div>
-
-        <button id="micButton" class="mic-button start-button" onclick="handleClick()" aria-label="Voice command button">
-            <div class="mic-icon">🎤</div>
-            <div id="micText">TAP TO BEGIN</div>
-        </button>
-
-        <div class="controls">
-            <button class="control-btn" onclick="testSpeech()">Test Speech</button>
-            <button class="control-btn" onclick="testMicrophone()">Test Mic</button>
-            <button class="control-btn" onclick="showCompatibility()">Check Browser</button>
-        </div>
+    <div id="textDisplay">
+        Welcome to Voice Dungeon Explorer!
+        Click the button below to begin your audio adventure.
+        Make sure to allow microphone permissions when prompted.
     </div>
 
-    <script>
-const debug = document.getElementById('debug');
-        const micButton = document.getElementById('micButton');
-        const micText = document.getElementById('micText');
-        const textDisplay = document.getElementById('textDisplay');
+    <button id="micButton" onclick="handleClick()" aria-label="Voice command button">
+        TAP TO BEGIN
+    </button>
 
-        function log(msg) {
-            const timestamp = new Date().toLocaleTimeString();
-            const logMsg = `[${timestamp}] ${msg}`;
-            console.log(logMsg);
-            debug.innerHTML = logMsg + '<br>' + debug.innerHTML.split('<br>').slice(0, 12).join('<br>');
-        }
+    <script>
+const micButton = document.getElementById('micButton');
+        const textDisplay = document.getElementById('textDisplay');
 
         function displayText(text) {
             textDisplay.innerHTML = text;
-            log('DISPLAY: ' + text.replace(/<[^>]*>/g, '').substring(0, 50) + '...');
         }
 
         let browserSupport = {
@@ -103,70 +46,6 @@ const debug = document.getElementById('debug');
             } catch (e) {
                 browserSupport.webAudio = false;
             }
-
-            log('Browser support check complete');
-        }
-function testSpeech() {
-            if (!browserSupport.speechSynthesis) {
-                displayText('Speech synthesis not supported. Try Chrome, Edge, or Safari.');
-                return;
-            }
-            try {
-                speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance('Testing speech synthesis. If you hear this, speech works.');
-                utterance.rate = 0.8;
-                utterance.onstart = () => displayText('🔊 Testing speech...');
-                utterance.onend = () => displayText('✅ Speech test completed!');
-                utterance.onerror = (event) => displayText('❌ Speech test failed: ' + event.error);
-                speechSynthesis.speak(utterance);
-            } catch (error) {
-                displayText('❌ Speech error: ' + error.message);
-            }
-        }
-
-        function testMicrophone() {
-            if (!browserSupport.speechRecognition) {
-                displayText('Voice recognition not supported. Try Chrome, Edge, or Safari.');
-                return;
-            }
-            if (!browserSupport.https) {
-                displayText('Microphone requires HTTPS. Use GitHub Pages.');
-                return;
-            }
-            try {
-                const Recognition = window.webkitSpeechRecognition || window.SpeechRecognition;
-                const recognition = new Recognition();
-                recognition.continuous = false;
-                recognition.lang = 'en-US';
-                recognition.onstart = () => {
-                    displayText('🎤 Say something to test microphone...');
-                    micButton.classList.add('listening');
-                };
-                recognition.onresult = (event) => {
-                    const transcript = event.results[0][0].transcript;
-                    displayText(`✅ Microphone working! You said: "${transcript}"`);
-                    micButton.classList.remove('listening');
-                };
-                recognition.onerror = (event) => {
-                    let errorMsg = 'Microphone test failed: ';
-                    switch(event.error) {
-                        case 'not-allowed': errorMsg += 'Permission denied. Allow microphone access.'; break;
-                        case 'no-speech': errorMsg += 'No speech detected. Try speaking louder.'; break;
-                        default: errorMsg += event.error;
-                    }
-                    displayText('❌ ' + errorMsg);
-                    micButton.classList.remove('listening');
-                };
-                recognition.onend = () => micButton.classList.remove('listening');
-                recognition.start();
-            } catch (error) {
-                displayText('❌ Microphone setup failed: ' + error.message);
-            }
-        }
-
-        function showCompatibility() {
-            const details = `Browser Compatibility:<br><br>HTTPS: ${browserSupport.https ? '✅' : '❌'}<br>Speech: ${browserSupport.speechSynthesis ? '✅' : '❌'}<br>Voice Recognition: ${browserSupport.speechRecognition ? '✅' : '❌'}<br>Web Audio: ${browserSupport.webAudio ? '✅' : '❌'}`;
-            displayText(details);
         }
 
         const game = {
@@ -216,9 +95,8 @@ let recognition = null;
                 recognition.lang = 'en-US';
                 recognition.onstart = () => {
                     game.listening = true;
-                    micButton.classList.add('listening');
-                    micText.textContent = 'LISTENING...';
-                    displayText('🎤 Listening for your command...');
+                    micButton.textContent = 'LISTENING...';
+                    speak('Listening for your command...');
                 };
                 recognition.onresult = (event) => {
                     const command = event.results[0][0].transcript.toLowerCase().trim();
@@ -240,8 +118,7 @@ let recognition = null;
 
         function stopListening() {
             game.listening = false;
-            micButton.classList.remove('listening');
-            micText.textContent = 'SPEAK';
+            micButton.textContent = 'SPEAK';
             if (recognition) {
                 try { recognition.stop(); } catch (e) {}
                 recognition = null;
@@ -250,9 +127,8 @@ let recognition = null;
 
         function initializeGame() {
             game.initialized = true;
-            micButton.classList.remove('start-button');
-            micText.textContent = 'SPEAK';
-            const welcome = "Welcome to Voice Dungeon Explorer!<br><br>Choose your class:<br><strong>WARRIOR</strong>, <strong>MAGE</strong>, or <strong>ROGUE</strong>";
+            micButton.textContent = 'SPEAK';
+            const welcome = "Welcome to Voice Dungeon Explorer! Choose your class: WARRIOR, MAGE, or ROGUE";
             speak(welcome);
         }
 
@@ -289,26 +165,26 @@ let recognition = null;
             game.player.inventory = [...classData.items];
             game.needsClass = false;
             game.started = true;
-            speak(`You are now a ${classData.name}!<br>Health: ${classData.health}<br>Gold: ${classData.gold}<br><br>Your adventure begins!`);
+            speak(`You are now a ${classData.name}! Health: ${classData.health}, Gold: ${classData.gold}. Your adventure begins!`);
         }
 
         function characterStatus() {
             const player = game.player;
-            speak(`Class: ${classes[player.class].name}<br>Health: ${player.health}<br>Gold: ${player.gold}`);
+            speak(`Class: ${classes[player.class].name}, Health: ${player.health}, Gold: ${player.gold}`);
         }
 
         function listInventory() {
-            const message = game.player.inventory.length === 0 ? 'Your inventory is empty.' : `Inventory:<br>${game.player.inventory.join('<br>')}<br><br>Gold: ${game.player.gold}`;
+            const message = game.player.inventory.length === 0 ? 'Your inventory is empty.' : `Inventory: ${game.player.inventory.join(', ')}. Gold: ${game.player.gold}`;
             speak(message);
         }
 
         document.addEventListener('DOMContentLoaded', () => {
             checkBrowserSupport();
-            log('Voice Dungeon Explorer loaded');
         });
 
         micButton.addEventListener('contextmenu', (e) => e.preventDefault());
     </script>
 </body>
 </html>
+
 
