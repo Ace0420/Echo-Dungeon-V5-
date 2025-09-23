@@ -6,10 +6,10 @@
     <title>Voice Dungeon Explorer</title>
     <style>
         * { box-sizing: border-box; }
-        body { 
-            margin: 0; padding: 0; background: #111; 
-            display: flex; justify-content: center; align-items: center; 
-            min-height: 100vh; font-family: Arial, sans-serif; 
+        body {
+            margin: 0; padding: 0; background: #111;
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; font-family: Arial, sans-serif;
         }
         .container { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 600px; padding: 20px; }
         .mic-button {
@@ -27,6 +27,12 @@
             min-height: 120px; width: 100%; margin-bottom: 20px; font-size: 16px;
             line-height: 1.4; text-align: center; border: 2px solid #444;
         }
+        #debug {
+            position: fixed; top: 10px; left: 10px; color: #fff; font-size: 11px;
+            background: rgba(0,0,0,0.9); padding: 10px; border-radius: 5px;
+            max-width: 300px; max-height: 200px; overflow-y: auto;
+            font-family: monospace; line-height: 1.3; border: 1px solid #444;
+        }
         .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 10px; }
         .control-btn {
             background: #333; color: #fff; border: 1px solid #666; padding: 8px 16px;
@@ -36,40 +42,71 @@
     </style>
 </head>
 <body>
+    <div id="debug">Initializing Voice Dungeon Explorer...</div>
+
     <div class="container">
         <div id="textDisplay" class="text-display">
             Welcome to Voice Dungeon Explorer!<br><br>
             Click the button below to begin your audio adventure.<br>
             Make sure to allow microphone permissions when prompted.
         </div>
-        
+
         <button id="micButton" class="mic-button start-button" onclick="handleClick()" aria-label="Voice command button">
             <div class="mic-icon">🎤</div>
             <div id="micText">TAP TO BEGIN</div>
         </button>
-        
+
         <div class="controls">
             <button class="control-btn" onclick="testSpeech()">Test Speech</button>
             <button class="control-btn" onclick="testMicrophone()">Test Mic</button>
+            <button class="control-btn" onclick="showCompatibility()">Check Browser</button>
         </div>
     </div>
 
     <script>
+const debug = document.getElementById('debug');
         const micButton = document.getElementById('micButton');
         const micText = document.getElementById('micText');
         const textDisplay = document.getElementById('textDisplay');
-        
+
+        function log(msg) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logMsg = `[${timestamp}] ${msg}`;
+            console.log(logMsg);
+            debug.innerHTML = logMsg + '<br>' + debug.innerHTML.split('<br>').slice(0, 12).join('<br>');
+        }
+
         function displayText(text) {
             textDisplay.innerHTML = text;
+            log('DISPLAY: ' + text.replace(/<[^>]*>/g, '').substring(0, 50) + '...');
         }
-        
+
         let browserSupport = {
-            speechSynthesis: !!(window.speechSynthesis && window.SpeechSynthesisUtterance),
-            speechRecognition: !!(window.webkitSpeechRecognition || window.SpeechRecognition),
-            https: window.location.protocol === 'https:' || window.location.hostname === 'localhost'
+            speechSynthesis: false,
+            speechRecognition: false,
+            webAudio: false,
+            https: false
         };
-        
-        function testSpeech() {
+
+        function checkBrowserSupport() {
+            browserSupport.https = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+            browserSupport.speechSynthesis = !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
+            browserSupport.speechRecognition = !!(window.webkitSpeechRecognition || window.SpeechRecognition);
+
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) {
+                    const ctx = new AudioContext();
+                    browserSupport.webAudio = true;
+                    ctx.close();
+                }
+            } catch (e) {
+                browserSupport.webAudio = false;
+            }
+
+            log('Browser support check complete');
+        }
+function testSpeech() {
             if (!browserSupport.speechSynthesis) {
                 displayText('Speech synthesis not supported. Try Chrome, Edge, or Safari.');
                 return;
@@ -86,7 +123,7 @@
                 displayText('❌ Speech error: ' + error.message);
             }
         }
-        
+
         function testMicrophone() {
             if (!browserSupport.speechRecognition) {
                 displayText('Voice recognition not supported. Try Chrome, Edge, or Safari.');
@@ -126,31 +163,23 @@
                 displayText('❌ Microphone setup failed: ' + error.message);
             }
         }
-        
+
+        function showCompatibility() {
+            const details = `Browser Compatibility:<br><br>HTTPS: ${browserSupport.https ? '✅' : '❌'}<br>Speech: ${browserSupport.speechSynthesis ? '✅' : '❌'}<br>Voice Recognition: ${browserSupport.speechRecognition ? '✅' : '❌'}<br>Web Audio: ${browserSupport.webAudio ? '✅' : '❌'}`;
+            displayText(details);
+        }
+
         const game = {
-            player: { 
-                class: '', level: 1, health: 100, maxHealth: 100, mana: 50, maxMana: 50, 
-                gold: 25, inventory: [], position: { x: 0, y: 0 } 
-            },
-            currentRoom: null, map: {}, listening: false, started: false, 
-            needsClass: true, initialized: false
+            player: { class: '', level: 1, health: 100, maxHealth: 100, mana: 50, maxMana: 50, gold: 25, inventory: [], position: { x: 0, y: 0 } },
+            currentRoom: null, map: {}, listening: false, started: false, needsClass: true, initialized: false
         };
-        
+
         const classes = {
-            warrior: { 
-                name: 'Warrior', health: 120, mana: 30, gold: 50, 
-                items: ['Iron Sword', 'Health Potion', 'Leather Armor'] 
-            },
-            mage: { 
-                name: 'Mage', health: 80, mana: 100, gold: 75, 
-                items: ['Magic Staff', 'Mana Potion', 'Cloth Robes'] 
-            },
-            rogue: { 
-                name: 'Rogue', health: 100, mana: 60, gold: 100, 
-                items: ['Steel Dagger', 'Lockpicks', 'Studded Leather'] 
-            }
+            warrior: { name: 'Warrior', health: 120, mana: 30, gold: 50, items: ['Iron Sword', 'Health Potion', 'Leather Armor'] },
+            mage: { name: 'Mage', health: 80, mana: 100, gold: 75, items: ['Magic Staff', 'Mana Potion', 'Cloth Robes'] },
+            rogue: { name: 'Rogue', health: 100, mana: 60, gold: 100, items: ['Steel Dagger', 'Lockpicks', 'Studded Leather'] }
         };
-        
+
         function speak(text, callback) {
             displayText(text);
             if (!browserSupport.speechSynthesis) {
@@ -172,56 +201,35 @@
                 if (callback) setTimeout(callback, 2000);
             }
         }
-        
-        let recognition = null;
-        
+let recognition = null;
+
         function startListening() {
             if (!browserSupport.speechRecognition || !browserSupport.https) {
                 speak('Voice recognition requires HTTPS and a compatible browser.');
                 return;
             }
-            if (game.listening) { 
-                stopListening(); 
-                return; 
-            }
+            if (game.listening) { stopListening(); return; }
             try {
                 const Recognition = window.webkitSpeechRecognition || window.SpeechRecognition;
                 recognition = new Recognition();
                 recognition.continuous = false;
-                recognition.interimResults = false;
                 recognition.lang = 'en-US';
-                recognition.maxAlternatives = 1;
-                
                 recognition.onstart = () => {
                     game.listening = true;
                     micButton.classList.add('listening');
                     micText.textContent = 'LISTENING...';
                     displayText('🎤 Listening for your command...');
                 };
-                
                 recognition.onresult = (event) => {
                     const command = event.results[0][0].transcript.toLowerCase().trim();
-                    displayText(`You said: "${command}"<br><br>Processing...`);
+                    displayText(`You said: "${command}"`);
                     stopListening();
-                    setTimeout(() => processCommand(command), 500);
+                    setTimeout(() => processCommand(command), 1000);
                 };
-                
                 recognition.onerror = (event) => {
                     stopListening();
-                    let errorMsg = 'Voice error: ';
-                    switch(event.error) {
-                        case 'not-allowed': 
-                            errorMsg += 'Microphone permission denied'; 
-                            break;
-                        case 'no-speech': 
-                            errorMsg += 'No speech detected'; 
-                            break;
-                        default: 
-                            errorMsg += event.error;
-                    }
-                    speak(errorMsg);
+                    speak('Voice error: ' + event.error);
                 };
-                
                 recognition.onend = () => stopListening();
                 recognition.start();
             } catch (error) {
@@ -229,31 +237,25 @@
                 stopListening();
             }
         }
-        
+
         function stopListening() {
             game.listening = false;
             micButton.classList.remove('listening');
             micText.textContent = 'SPEAK';
             if (recognition) {
-                try { 
-                    recognition.stop(); 
-                } catch (e) {}
+                try { recognition.stop(); } catch (e) {}
                 recognition = null;
             }
         }
-        
+
         function initializeGame() {
             game.initialized = true;
             micButton.classList.remove('start-button');
             micText.textContent = 'SPEAK';
-            const welcome = "Welcome to Voice Dungeon Explorer!<br><br>" +
-                "Choose your character class:<br><br>" +
-                "Say <strong>WARRIOR</strong> for combat strength<br>" +
-                "Say <strong>MAGE</strong> for magical power<br>" +
-                "Say <strong>ROGUE</strong> for stealth skills";
+            const welcome = "Welcome to Voice Dungeon Explorer!<br><br>Choose your class:<br><strong>WARRIOR</strong>, <strong>MAGE</strong>, or <strong>ROGUE</strong>";
             speak(welcome);
         }
-        
+
         function handleClick() {
             if (!game.initialized) {
                 initializeGame();
@@ -261,36 +263,21 @@
                 startListening();
             }
         }
-        
+
         function processCommand(command) {
-            // Clean up the command
-            const cleanCommand = command.toLowerCase().trim();
-            
             if (game.needsClass) {
-                if (cleanCommand.includes('warrior') || cleanCommand.includes('fighter')) {
-                    selectClass('warrior');
-                } else if (cleanCommand.includes('mage') || cleanCommand.includes('wizard') || cleanCommand.includes('magic')) {
-                    selectClass('mage');
-                } else if (cleanCommand.includes('rogue') || cleanCommand.includes('thief') || cleanCommand.includes('assassin')) {
-                    selectClass('rogue');
-                } else {
-                    speak('I heard: "' + cleanCommand + '"<br><br>Please say one of these:<br><strong>WARRIOR</strong>, <strong>MAGE</strong>, or <strong>ROGUE</strong>');
-                }
+                if (command.includes('warrior')) selectClass('warrior');
+                else if (command.includes('mage')) selectClass('mage');
+                else if (command.includes('rogue')) selectClass('rogue');
+                else speak('Please say WARRIOR, MAGE, or ROGUE');
                 return;
             }
-            
-            // Game commands after class selection
-            if (cleanCommand.includes('status') || cleanCommand.includes('stats')) {
-                characterStatus();
-            } else if (cleanCommand.includes('inventory') || cleanCommand.includes('items')) {
-                listInventory();
-            } else if (cleanCommand.includes('help') || cleanCommand.includes('command')) {
-                speak('Available commands:<br><br>STATUS - character info<br>INVENTORY - your items<br>HELP - this message');
-            } else {
-                speak('Unknown command: "' + cleanCommand + '"<br><br>Say HELP for available commands');
-            }
+            if (command.includes('status')) characterStatus();
+            else if (command.includes('inventory')) listInventory();
+            else if (command.includes('help')) speak('Say STATUS, INVENTORY, or HELP');
+            else speak('Unknown command. Say HELP for options.');
         }
-        
+
         function selectClass(className) {
             const classData = classes[className];
             game.player.class = className;
@@ -302,47 +289,26 @@
             game.player.inventory = [...classData.items];
             game.needsClass = false;
             game.started = true;
-            
-            const message = `You have chosen the ${classData.name} class!<br><br>` +
-                `Health: ${classData.health}<br>` +
-                `Mana: ${classData.mana}<br>` +
-                `Gold: ${classData.gold} coins<br><br>` +
-                `Starting equipment: ${classData.items.join(', ')}<br><br>` +
-                `Say STATUS to hear your character details or HELP for commands.`;
-            
-            speak(message);
+            speak(`You are now a ${classData.name}!<br>Health: ${classData.health}<br>Gold: ${classData.gold}<br><br>Your adventure begins!`);
         }
-        
+
         function characterStatus() {
             const player = game.player;
-            const classData = classes[player.class];
-            const message = `Character Status:<br><br>` +
-                `Class: ${classData.name}<br>` +
-                `Level: ${player.level}<br>` +
-                `Health: ${player.health}/${player.maxHealth}<br>` +
-                `Mana: ${player.mana}/${player.maxMana}<br>` +
-                `Gold: ${player.gold} coins`;
-            speak(message);
+            speak(`Class: ${classes[player.class].name}<br>Health: ${player.health}<br>Gold: ${player.gold}`);
         }
-        
+
         function listInventory() {
-            if (game.player.inventory.length === 0) {
-                speak('Your inventory is empty.<br><br>You have ' + game.player.gold + ' gold coins.');
-                return;
-            }
-            const message = `Your inventory contains:<br><br>` +
-                `${game.player.inventory.join('<br>')}<br><br>` +
-                `Gold: ${game.player.gold} coins`;
+            const message = game.player.inventory.length === 0 ? 'Your inventory is empty.' : `Inventory:<br>${game.player.inventory.join('<br>')}<br><br>Gold: ${game.player.gold}`;
             speak(message);
         }
-        
-        // Event listeners
+
         document.addEventListener('DOMContentLoaded', () => {
-            // Initialize browser support check
-            console.log('Voice Dungeon Explorer loaded');
+            checkBrowserSupport();
+            log('Voice Dungeon Explorer loaded');
         });
-        
+
         micButton.addEventListener('contextmenu', (e) => e.preventDefault());
     </script>
 </body>
 </html>
+
