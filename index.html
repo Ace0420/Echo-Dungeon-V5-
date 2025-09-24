@@ -9,6 +9,7 @@
             margin: 0;
             padding: 0;
             background: #111;
+            font-family: Arial, sans-serif;
         }
         #micButton {
             position: fixed;
@@ -19,6 +20,7 @@
             background: #222;
             border: none;
             cursor: pointer;
+            outline: none;
         }
         #micButton:active {
             background: #444;
@@ -29,7 +31,6 @@
         .start-button {
             background: #000044 !important;
         }
-        /* Hide text display from view, but keep it for screen readers */
         #textDisplay {
             position: absolute;
             width: 1px;
@@ -41,74 +42,127 @@
             white-space: nowrap;
             border: 0;
         }
+        [aria-live="polite"] {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+        }
     </style>
 </head>
 <body>
-    <div id="textDisplay"></div>
-    <button id="micButton" class="start-button" onclick="handleClick()" aria-label="Voice command button"></button>
+    <div id="textDisplay" aria-live="polite"></div>
+    <button id="micButton" class="start-button" aria-label="Voice command button"></button>
 
     <script>
         const micButton = document.getElementById('micButton');
         const textDisplay = document.getElementById('textDisplay');
 
-        function displayText(text) {
-            textDisplay.innerHTML = text;
-        }
-
-        let browserSupport = {
-            speechSynthesis: false,
-            speechRecognition: false,
-            https: false
+        // Browser support checks
+        const browserSupport = {
+            speechSynthesis: !!(window.speechSynthesis && window.SpeechSynthesisUtterance),
+            speechRecognition: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+            https: window.location.protocol === 'https:' || window.location.hostname === 'localhost'
         };
 
-        function checkBrowserSupport() {
-            browserSupport.https = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
-            browserSupport.speechSynthesis = !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
-            browserSupport.speechRecognition = !!(window.webkitSpeechRecognition || window.SpeechRecognition);
-        }
-
+        // Game state
         const game = {
-            player: { class: '', level: 1, health: 100, maxHealth: 100, mana: 50, maxMana: 50, gold: 25, inventory: [], position: { x: 0, y: 0 } },
-            currentRoom: null, map: {}, listening: false, started: false, needsClass: true, initialized: false
+            player: {
+                class: '',
+                level: 1,
+                health: 100,
+                maxHealth: 100,
+                mana: 50,
+                maxMana: 50,
+                gold: 25,
+                inventory: [],
+                position: { x: 2, y: 2 } // Start in center of 5x5 grid
+            },
+            map: {},
+            currentRoom: null,
+            listening: false,
+            started: false,
+            needsClass: true,
+            initialized: false
         };
 
+        // Player classes
         const classes = {
             warrior: { name: 'Warrior', health: 120, mana: 30, gold: 50, items: ['Iron Sword', 'Health Potion', 'Leather Armor'] },
             mage: { name: 'Mage', health: 80, mana: 100, gold: 75, items: ['Magic Staff', 'Mana Potion', 'Cloth Robes'] },
             rogue: { name: 'Rogue', health: 100, mana: 60, gold: 100, items: ['Steel Dagger', 'Lockpicks', 'Studded Leather'] }
         };
 
+        // Simple 5x5 dungeon grid
+        const mapSize = 5;
+        function generateMap() {
+            for (let x = 0; x < mapSize; x++) {
+                for (let y = 0; y < mapSize; y++) {
+                    game.map[`${x},${y}`] = {
+                        description: `Room ${x},${y}: A cold, damp chamber with echoing stone walls.`,
+                        contents: Math.random() < 0.3 ? 'item' : Math.random() < 0.2 ? 'enemy' : 'empty'
+                    };
+                }
+            }
+            game.map['2,2'].description = 'The dungeon entrance. A faint breeze carries the scent of danger.';
+            game.map['2,2'].contents = 'empty';
+        }
+
+        // Audio queue to prevent overlap
+        let audioQueue = [];
+        let isSpeaking = false;
+
         function speak(text, callback) {
-            displayText(text);
+            textDisplay.textContent = text;
             if (!browserSupport.speechSynthesis) {
                 if (callback) setTimeout(callback, 2000);
                 return;
             }
+            audioQueue.push({ text: text.replace(/<[^>]*>/g, ''), callback });
+            processAudioQueue();
+        }
+
+        function processAudioQueue() {
+            if (isSpeaking || !audioQueue.length) return;
+            isSpeaking = true;
+            const { text, callback } = audioQueue.shift();
             try {
                 speechSynthesis.cancel();
                 setTimeout(() => {
-                    const utterance = new SpeechSynthesisUtterance(text.replace(/<[^>]*>/g, ''));
-                    utterance.rate = 0.8;
-                    if (callback) {
-                        utterance.onend = callback;
-                        utterance.onerror = callback;
-                    }
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 0.9;
+                    utterance.onend = () => {
+                        isSpeaking = false;
+                        if (callback) callback();
+                        processAudioQueue();
+                    };
+                    utterance.onerror = () => {
+                        isSpeaking = false;
+                        if (callback) callback();
+                        processAudioQueue();
+                    };
                     speechSynthesis.speak(utterance);
                 }, 100);
             } catch (error) {
-                if (callback) setTimeout(callback, 2000);
+                isSpeaking = false;
+                if (callback) callback();
+                processAudioQueue();
             }
         }
-        let recognition = null;
 
+        // Voice recognition
+        let recognition = null;
         function startListening() {
             if (!browserSupport.speechRecognition || !browserSupport.https) {
                 speak('Voice recognition requires HTTPS and a compatible browser.');
                 return;
             }
-            if (game.listening) { stopListening(); return; }
+            if (game.listening) return;
             try {
-                const Recognition = window.webkitSpeechRecognition || window.SpeechRecognition;
+                const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 recognition = new Recognition();
                 recognition.continuous = false;
                 recognition.lang = 'en-US';
@@ -119,19 +173,19 @@
                 };
                 recognition.onresult = (event) => {
                     const command = event.results[0][0].transcript.toLowerCase().trim();
-                    displayText(`You said: "${command}"`);
+                    textDisplay.textContent = `You said: "${command}"`;
                     stopListening();
                     setTimeout(() => processCommand(command), 1000);
                 };
                 recognition.onerror = (event) => {
                     stopListening();
-                    speak('Voice error: ' + event.error);
+                    speak(`Voice error: ${event.error}. Try again.`);
                 };
-                recognition.onend = () => stopListening();
+                recognition.onend = stopListening;
                 recognition.start();
             } catch (error) {
-                speak('Failed to start voice recognition: ' + error.message);
                 stopListening();
+                speak('Failed to start voice recognition. Please try again.');
             }
         }
 
@@ -144,42 +198,42 @@
             }
         }
 
-        function initializeGame() {
-            game.initialized = true;
-            micButton.classList.remove('start-button');
-            const welcome = "Welcome to Voice Dungeon Explorer. To begin, click the button to choose your class: warrior, mage, or rogue.";
-            speak(welcome);
-        }
-
-        function handleClick() {
-            if (!game.initialized) {
-                initializeGame();
-            } else {
-                startListening();
-            }
-        }
+        // Command parsing with keyword mapping
+        const commandMap = {
+            'move north|go north|north': () => movePlayer(0, -1),
+            'move south|go south|south': () => movePlayer(0, 1),
+            'move east|go east|east': () => movePlayer(1, 0),
+            'move west|go west|west': () => movePlayer(-1, 0),
+            'status|check status|stats': characterStatus,
+            'inventory|check inventory|items': listInventory,
+            'help|what can i do': showHelp,
+            'explore|look around|search': exploreRoom
+        };
 
         function processCommand(command) {
             if (game.needsClass) {
                 if (command.includes('warrior')) selectClass('warrior');
                 else if (command.includes('mage')) selectClass('mage');
                 else if (command.includes('rogue')) selectClass('rogue');
-                else speak('Please say WARRIOR, MAGE, or ROGUE');
+                else speak('Please say WARRIOR, MAGE, or ROGUE to choose your class.');
                 return;
             }
 
-            if (!game.currentRoom) {
-                speak("I'm sorry, I seem to be lost. You can ask for status, inventory, or help.");
-            } else {
-                // Here's where the game logic would go
-                if (command.includes('status')) characterStatus();
-                else if (command.includes('inventory')) listInventory();
-                else if (command.includes('help')) speak('Say STATUS, INVENTORY, or HELP. You can also explore.');
-                else if (command.includes('explore')) exploreRoom();
-                else speak('Unknown command. Say HELP for options.');
+            let matched = false;
+            for (const [pattern, action] of Object.entries(commandMap)) {
+                const regex = new RegExp(`^(${pattern})$`, 'i');
+                if (regex.test(command)) {
+                    action();
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                speak('Unknown command. Say HELP for options.');
             }
         }
 
+        // Game logic
         function selectClass(className) {
             const classData = classes[className];
             game.player.class = className;
@@ -195,21 +249,35 @@
         }
 
         function startAdventure() {
-            game.currentRoom = "entrance";
+            generateMap();
+            game.currentRoom = '2,2';
+            exploreRoom();
+        }
+
+        function movePlayer(dx, dy) {
+            const newX = game.player.position.x + dx;
+            const newY = game.player.position.y + dy;
+            if (newX < 0 || newX >= mapSize || newY < 0 || newY >= mapSize) {
+                speak('You cannot move that way. The path is blocked.');
+                return;
+            }
+            game.player.position.x = newX;
+            game.player.position.y = newY;
+            game.currentRoom = `${newX},${newY}`;
             exploreRoom();
         }
 
         function exploreRoom() {
-            if (game.currentRoom === "entrance") {
-                speak("You are at the entrance to a dark dungeon. The air is cold and damp. You can hear the dripping of water somewhere ahead. You can say 'explore' or 'inventory'.");
-            } else {
-                speak("There is nothing of interest here. Try exploring.");
-            }
+            const room = game.map[game.currentRoom];
+            let message = room.description;
+            if (room.contents === 'item') message += ' You find a treasure chest!';
+            else if (room.contents === 'enemy') message += ' A hostile creature lurks here!';
+            speak(message);
         }
 
         function characterStatus() {
             const player = game.player;
-            speak(`Class: ${classes[player.class].name}, Health: ${player.health}, Gold: ${player.gold}`);
+            speak(`Class: ${classes[player.class].name}, Health: ${player.health}, Mana: ${player.mana}, Gold: ${player.gold}`);
         }
 
         function listInventory() {
@@ -217,11 +285,30 @@
             speak(message);
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            checkBrowserSupport();
-        });
+        function showHelp() {
+            speak('You can say: MOVE NORTH, SOUTH, EAST, or WEST to navigate, STATUS to check your stats, INVENTORY to list items, EXPLORE to look around, or HELP for this message.');
+        }
 
-        micButton.addEventListener('contextmenu', (e) => e.preventDefault());
+        // Debounced click handler
+        let lastClick = 0;
+        function handleClick() {
+            const now = Date.now();
+            if (now - lastClick < 1000) return; // Debounce 1s
+            lastClick = now;
+            if (!game.initialized) {
+                game.initialized = true;
+                micButton.classList.remove('start-button');
+                speak('Welcome to Voice Dungeon Explorer. Say WARRIOR, MAGE, or ROGUE to choose your class.');
+            } else {
+                startListening();
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            micButton.addEventListener('click', handleClick);
+            micButton.addEventListener('contextmenu', (e) => e.preventDefault());
+        });
     </script>
 </body>
 </html>
