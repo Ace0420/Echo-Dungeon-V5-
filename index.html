@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Voice Dungeon Explorer</title>
+    <title>Echo Dungeon</title>
     <style>
         body {
             margin: 0;
             padding: 0;
             background: #111;
-            font-family: Arial, sans-serif;
         }
         #micButton {
             position: fixed;
@@ -20,7 +19,7 @@
             background: #222;
             border: none;
             cursor: pointer;
-            outline: none;
+            transition: background 0.3s;
         }
         #micButton:active {
             background: #444;
@@ -42,33 +41,32 @@
             white-space: nowrap;
             border: 0;
         }
-        [aria-live="polite"] {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0, 0, 0, 0);
-        }
     </style>
 </head>
 <body>
-    <div id="textDisplay" aria-live="polite"></div>
-    <button id="micButton" class="start-button" aria-label="Voice command button"></button>
+    <div id="textDisplay"></div>
+    <button id="micButton" class="start-button" onclick="handleClick()" aria-label="Voice command button"></button>
 
     <script>
         const micButton = document.getElementById('micButton');
         const textDisplay = document.getElementById('textDisplay');
 
-        // Browser support checks
-        const browserSupport = {
-            speechSynthesis: !!(window.speechSynthesis && window.SpeechSynthesisUtterance),
-            speechRecognition: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
-            https: window.location.protocol === 'https:' || window.location.hostname === 'localhost'
+        function displayText(text) {
+            textDisplay.innerHTML = text;
+        }
+
+        let browserSupport = {
+            speechSynthesis: false,
+            speechRecognition: false,
+            https: false
         };
 
-        // Game state
+        function checkBrowserSupport() {
+            browserSupport.https = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+            browserSupport.speechSynthesis = !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
+            browserSupport.speechRecognition = !!(window.webkitSpeechRecognition || window.SpeechRecognition);
+        }
+
         const game = {
             player: {
                 class: '',
@@ -79,113 +77,164 @@
                 maxMana: 50,
                 gold: 25,
                 inventory: [],
-                position: { x: 2, y: 2 } // Start in center of 5x5 grid
+                position: { x: 2, y: 2 },
+                xp: 0
             },
-            map: {},
+            dungeon: {
+                grid: {},
+                size: 6,
+                secretRoom: null,
+                hasSecretRoom: false,
+                currentLevel: 1 
+            },
             currentRoom: null,
+            combat: null,
             listening: false,
             started: false,
             needsClass: true,
-            initialized: false
+            initialized: false,
+            phase: 'init'
         };
 
-        // Player classes
         const classes = {
-            warrior: { name: 'Warrior', health: 120, mana: 30, gold: 50, items: ['Iron Sword', 'Health Potion', 'Leather Armor'] },
-            mage: { name: 'Mage', health: 80, mana: 100, gold: 75, items: ['Magic Staff', 'Mana Potion', 'Cloth Robes'] },
-            rogue: { name: 'Rogue', health: 100, mana: 60, gold: 100, items: ['Steel Dagger', 'Lockpicks', 'Studded Leather'] }
+            warrior: {
+                name: 'Warrior',
+                health: 120,
+                maxHealth: 120,
+                mana: 30,
+                maxMana: 30,
+                gold: 50,
+                items: ['Iron Sword', 'Health Potion', 'Health Potion', 'Leather Armor'],
+                special: { name: 'Power Strike', damage: 40, cost: 15, type: 'damage' }
+            },
+            mage: { 
+                name: 'Mage',
+                health: 80,
+                maxHealth: 80,
+                mana: 100,
+                maxMana: 100,
+                gold: 75,
+                items: ['Magic Staff', 'Mana Potion', 'Health Potion', 'Cloth Robes'],
+                special: { name: 'Fireball', damage: 30, cost: 20, type: 'damage' } 
+            },
+            rogue: {
+                name: 'Rogue',
+                health: 100,
+                maxHealth: 100,
+                mana: 60,
+                maxMana: 60,
+                gold: 100,
+                items: ['Steel Dagger', 'Lockpicks', 'Health Potion', 'Studded Leather'],
+                special: { name: 'Backstab', damage: 35, cost: 25, type: 'damage' }
+            }
         };
 
-        // Simple 5x5 dungeon grid
-        const mapSize = 5;
-        function generateMap() {
-            for (let x = 0; x < mapSize; x++) {
-                for (let y = 0; y < mapSize; y++) {
-                    game.map[`${x},${y}`] = {
-                        description: `Room ${x},${y}: A cold, damp chamber with echoing stone walls.`,
-                        contents: Math.random() < 0.3 ? 'item' : Math.random() < 0.2 ? 'enemy' : 'empty'
-                    };
-                }
-            }
-            game.map['2,2'].description = 'The dungeon entrance. A faint breeze carries the scent of danger.';
-            game.map['2,2'].contents = 'empty';
-        }
+        const roomTypes = {
+            entrance: { description: 'the entrance. Cold stone walls surround you.', hasEnemy: false },
+            empty: { description: 'an empty chamber. Dust covers the floor.', hasEnemy: false },
+            treasure: { description: 'a treasure room. Something glints in the darkness.', hasEnemy: false },
+            enemy: { description: 'a dark chamber. You sense danger.', hasEnemy: true },
+            boss: { description: 'the boss chamber. A powerful presence awaits.', hasEnemy: true },
+            trap: { description: 'a trapped room. Be careful.', hasEnemy: false },
+            stairs: { description: 'a room with a dark stone staircase leading down.', hasEnemy: false },
+            shop: { description: 'a strange, temporary merchant stall set up in the dark.', hasEnemy: false } 
+        };
 
-        // Audio queue to prevent overlap
-        let audioQueue = [];
-        let isSpeaking = false;
+        const enemies = {
+            goblin: { name: 'Goblin', health: 30, damage: 8, gold: 10, xp: 10, fleeChance: 0.8 }, 
+            skeleton: { name: 'Skeleton', health: 40, damage: 10, gold: 12, xp: 15, fleeChance: 0.7 },
+            orc: { name: 'Orc', health: 60, damage: 15, gold: 18, xp: 25, fleeChance: 0.5 },
+            wraith: { name: 'Wraith', health: 80, damage: 20, gold: 25, xp: 35, fleeChance: 0.3 },
+            dragon: { name: 'Dragon', health: 150, damage: 30, gold: 50, xp: 100, fleeChance: 0.1 } 
+        };
 
+        const rings = [
+            { name: 'Ring of Minor Health', effect: '+10 Max Health', stat: 'maxHealth', value: 10 },
+            { name: 'Ring of Minor Mana', effect: '+10 Max Mana', stat: 'maxMana', value: 10 },
+            { name: 'Ring of Protection', effect: '+1 Defense', stat: 'defense', value: 1 }
+        ];
+        
+        const shopInventory = [
+            { name: 'Health Potion', price: 15, type: 'consumable' },
+            { name: 'Mana Potion', price: 20, type: 'consumable' },
+            { name: 'Ring of Minor Health', price: 100, type: 'ring' },
+            { name: 'Ring of Minor Mana', price: 100, type: 'ring' },
+            { name: 'Manual of Health', price: 250, type: 'manual', stat: 'maxHealth', value: 20, usageLimit: 1 },
+            { name: 'Manual of Mana', price: 250, type: 'manual', stat: 'maxMana', value: 20, usageLimit: 1 }
+        ];
+
+        // END CORE GAME CONFIG AND INIT
         function speak(text, callback) {
-            textDisplay.textContent = text;
+            displayText(text);
             if (!browserSupport.speechSynthesis) {
                 if (callback) setTimeout(callback, 2000);
                 return;
             }
-            audioQueue.push({ text: text.replace(/<[^>]*>/g, ''), callback });
-            processAudioQueue();
-        }
-
-        function processAudioQueue() {
-            if (isSpeaking || !audioQueue.length) return;
-            isSpeaking = true;
-            const { text, callback } = audioQueue.shift();
             try {
                 speechSynthesis.cancel();
                 setTimeout(() => {
-                    const utterance = new SpeechSynthesisUtterance(text);
-                    utterance.rate = 0.9;
-                    utterance.onend = () => {
-                        isSpeaking = false;
-                        if (callback) callback();
-                        processAudioQueue();
-                    };
-                    utterance.onerror = () => {
-                        isSpeaking = false;
-                        if (callback) callback();
-                        processAudioQueue();
-                    };
+                    const utterance = new SpeechSynthesisUtterance(text.replace(/<[^>]*>/g, ''));
+                    utterance.rate = 0.8;
+                    if (callback) {
+                        utterance.onend = callback;
+                        utterance.onerror = callback;
+                    }
                     speechSynthesis.speak(utterance);
                 }, 100);
             } catch (error) {
-                isSpeaking = false;
-                if (callback) callback();
-                processAudioQueue();
+                if (callback) setTimeout(callback, 2000);
             }
         }
 
-        // Voice recognition
+        function speakSequence(messages, callback) {
+            if (messages.length === 0) {
+                if (callback) callback();
+                return;
+            }
+            const [first, ...rest] = messages;
+            speak(first, () => {
+                if (rest.length > 0) {
+                    setTimeout(() => speakSequence(rest, callback), 500);
+                } else if (callback) {
+                    callback();
+                }
+            });
+        }
+
         let recognition = null;
+
         function startListening() {
             if (!browserSupport.speechRecognition || !browserSupport.https) {
                 speak('Voice recognition requires HTTPS and a compatible browser.');
                 return;
             }
-            if (game.listening) return;
+            if (game.listening) { stopListening(); return; }
             try {
-                const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                const Recognition = window.webkitSpeechRecognition || window.SpeechRecognition;
                 recognition = new Recognition();
                 recognition.continuous = false;
                 recognition.lang = 'en-US';
                 recognition.onstart = () => {
                     game.listening = true;
                     micButton.classList.add('listening');
-                    speak('Listening for your command.');
                 };
                 recognition.onresult = (event) => {
                     const command = event.results[0][0].transcript.toLowerCase().trim();
-                    textDisplay.textContent = `You said: "${command}"`;
+                    displayText(`You said: "${command}"`);
                     stopListening();
-                    setTimeout(() => processCommand(command), 1000);
+                    setTimeout(() => processCommand(command), 500);
                 };
                 recognition.onerror = (event) => {
                     stopListening();
-                    speak(`Voice error: ${event.error}. Try again.`);
+                    if (event.error !== 'no-speech' && event.error !== 'aborted') {
+                        speak('Voice error. Try again.');
+                    }
                 };
-                recognition.onend = stopListening;
+                recognition.onend = () => stopListening();
                 recognition.start();
             } catch (error) {
+                speak('Failed to start voice recognition.');
                 stopListening();
-                speak('Failed to start voice recognition. Please try again.');
             }
         }
 
@@ -198,117 +247,908 @@
             }
         }
 
-        // Command parsing with keyword mapping
-        const commandMap = {
-            'move north|go north|north': () => movePlayer(0, -1),
-            'move south|go south|south': () => movePlayer(0, 1),
-            'move east|go east|east': () => movePlayer(1, 0),
-            'move west|go west|west': () => movePlayer(-1, 0),
-            'status|check status|stats': characterStatus,
-            'inventory|check inventory|items': listInventory,
-            'help|what can i do': showHelp,
-            'explore|look around|search': exploreRoom
-        };
-
-        function processCommand(command) {
-            if (game.needsClass) {
-                if (command.includes('warrior')) selectClass('warrior');
-                else if (command.includes('mage')) selectClass('mage');
-                else if (command.includes('rogue')) selectClass('rogue');
-                else speak('Please say WARRIOR, MAGE, or ROGUE to choose your class.');
-                return;
+        function saveGame() {
+            try {
+                localStorage.setItem('echoDungeonSave', JSON.stringify(game));
+                speak('Game saved successfully. You can load it next time by saying "load game".');
+            } catch (e) {
+                speak('Error saving game. Your browser may not support local storage.');
             }
+        }
 
-            let matched = false;
-            for (const [pattern, action] of Object.entries(commandMap)) {
-                const regex = new RegExp(`^(${pattern})$`, 'i');
-                if (regex.test(command)) {
-                    action();
-                    matched = true;
-                    break;
+        function loadGame() {
+            const savedData = localStorage.getItem('echoDungeonSave');
+            if (savedData) {
+                try {
+                    const loadedGame = JSON.parse(savedData);
+                    Object.assign(game, loadedGame);
+
+                    const key = `${game.player.position.x},${game.player.position.y}`;
+                    game.currentRoom = game.dungeon.grid[key];
+                    
+                    game.initialized = true;
+                    game.started = true;
+                    game.needsClass = false;
+                    game.phase = game.combat ? 'combat' : 'exploration';
+                    micButton.classList.remove('start-button');
+                    
+                    speak(`Game loaded successfully. You are on Level ${game.dungeon.currentLevel} at coordinates ${game.player.position.x}, ${game.player.position.y}.`, () => {
+                        if (game.combat) {
+                            speak(`You are still in combat with a ${game.combat.enemy.name}.`);
+                        } else {
+                            describeRoom();
+                        }
+                    });
+                } catch (e) {
+                    speak('Error loading game data. The save file might be corrupted.');
                 }
+            } else {
+                speak('No saved game found.');
             }
-            if (!matched) {
-                speak('Unknown command. Say HELP for options.');
-            }
         }
 
-        // Game logic
-        function selectClass(className) {
-            const classData = classes[className];
-            game.player.class = className;
-            game.player.health = classData.health;
-            game.player.maxHealth = classData.health;
-            game.player.mana = classData.mana;
-            game.player.maxMana = classData.mana;
-            game.player.gold = classData.gold;
-            game.player.inventory = [...classData.items];
-            game.needsClass = false;
-            game.started = true;
-            speak(`You are now a ${classData.name}! Health: ${classData.health}, Gold: ${classData.gold}. Your adventure begins!`, startAdventure);
+        function initializeGame() {
+            game.initialized = true;
+            micButton.classList.remove('start-button');
+            speak("Welcome to Echo Dungeon. Say load game to continue, or choose your class: warrior, mage, or rogue."); 
         }
 
-        function startAdventure() {
-            generateMap();
-            game.currentRoom = '2,2';
-            exploreRoom();
-        }
-
-        function movePlayer(dx, dy) {
-            const newX = game.player.position.x + dx;
-            const newY = game.player.position.y + dy;
-            if (newX < 0 || newX >= mapSize || newY < 0 || newY >= mapSize) {
-                speak('You cannot move that way. The path is blocked.');
-                return;
-            }
-            game.player.position.x = newX;
-            game.player.position.y = newY;
-            game.currentRoom = `${newX},${newY}`;
-            exploreRoom();
-        }
-
-        function exploreRoom() {
-            const room = game.map[game.currentRoom];
-            let message = room.description;
-            if (room.contents === 'item') message += ' You find a treasure chest!';
-            else if (room.contents === 'enemy') message += ' A hostile creature lurks here!';
-            speak(message);
-        }
-
-        function characterStatus() {
-            const player = game.player;
-            speak(`Class: ${classes[player.class].name}, Health: ${player.health}, Mana: ${player.mana}, Gold: ${player.gold}`);
-        }
-
-        function listInventory() {
-            const message = game.player.inventory.length === 0 ? 'Your inventory is empty.' : `Inventory: ${game.player.inventory.join(', ')}. Gold: ${game.player.gold}`;
-            speak(message);
-        }
-
-        function showHelp() {
-            speak('You can say: MOVE NORTH, SOUTH, EAST, or WEST to navigate, STATUS to check your stats, INVENTORY to list items, EXPLORE to look around, or HELP for this message.');
-        }
-
-        // Debounced click handler
-        let lastClick = 0;
         function handleClick() {
-            const now = Date.now();
-            if (now - lastClick < 1000) return; // Debounce 1s
-            lastClick = now;
             if (!game.initialized) {
-                game.initialized = true;
-                micButton.classList.remove('start-button');
-                speak('Welcome to Voice Dungeon Explorer. Say WARRIOR, MAGE, or ROGUE to choose your class.');
+                initializeGame();
             } else {
                 startListening();
             }
         }
 
-        // Initialize
+        function processCommand(command) {
+            if (command.includes('save game')) { saveGame(); return; }
+            if (command.includes('load game')) { loadGame(); return; }
+
+
+            if (game.needsClass) {
+                if (command.includes('warrior')) selectClass('warrior');
+                else if (command.includes('mage') || command.includes('wizard')) selectClass('mage'); 
+                else if (command.includes('rogue')) selectClass('rogue');
+                else speak('Please say warrior, mage, or rogue, or say load game.');
+                return;
+            }
+
+            if (game.combat) {
+                if (command.includes('attack')) playerAttack();
+                else if (command.includes('defend')) playerDefend();
+                else if (command.includes('special')) playerSpecial();
+                else if (command.includes('potion') || command.includes('use') || command.includes('drink') || command.includes('take')) processPotionCommand(command); 
+                else if (command.includes('flee') || command.includes('run')) attemptFlee();
+                else speak('Say attack, defend, special, use potion, or flee.');
+                return;
+            }
+
+            // Exploration Commands
+            if (command.includes('status') || command.includes('stats')) characterStatus();
+            else if (command.includes('inventory') || command.includes('items')) listInventory();
+            else if (command.includes('commands') || command.includes('what can i')) listCommands();
+            else if (command.includes('hint')) giveHint();
+            else if (command.includes('north')) move('north');
+            else if (command.includes('south')) move('south');
+            else if (command.includes('east')) move('east');
+            else if (command.includes('west')) move('west');
+            else if (command.includes('meditate') || command.includes('rest')) meditate(); 
+            else if (command.includes('look') || command.includes('around')) describeRoom();
+            else if (command.includes('search')) searchRoom();
+            else if (command.includes('open chest') || command.includes('chest')) openChest();
+            else if (command.includes('stairs') || command.includes('go down')) useStairs();
+            else if (command.includes('wear ring') || command.includes('equip ring')) equipRing(command);
+            else if (command.includes('buy') || command.includes('shop')) shop(command); 
+            else if (command.includes('help')) showHelp();
+            else speak('Unknown command. Say help for options, or say save game.');
+        }
+
+        function shop(command) {
+            if (game.currentRoom.type !== 'shop') {
+                speak('There is no shop here.');
+                return;
+            }
+            
+            if (command.includes('list') || command.includes('inventory') || command.includes('look')) {
+                let list = shopInventory.map(item => `${item.name} for ${item.price} gold`).join(', ');
+                speak(`The merchant offers: ${list}. To buy, say "buy" followed by the item name.`);
+            } else if (command.includes('buy')) {
+                const itemToBuy = shopInventory.find(item => command.includes(item.name.toLowerCase()));
+                
+                if (!itemToBuy) {
+                    speak('I did not understand which item you want to buy. Say "buy" followed by the item name, or "shop list" to see items.');
+                    return;
+                }
+                
+                if (game.player.gold < itemToBuy.price) {
+                    speak(`You only have ${game.player.gold} gold. You need ${itemToBuy.price} gold to buy ${itemToBuy.name}.`);
+                    return;
+                }
+                
+                if (itemToBuy.type === 'manual') {
+                    if (game.player.inventory.includes(`Used ${itemToBuy.name}`)) {
+                         speak(`You have already learned everything from that manual.`);
+                        return;
+                    }
+                    
+                    game.player.gold -= itemToBuy.price;
+                    game.player[itemToBuy.stat] += itemToBuy.value;
+                    game.player[itemToBuy.stat === 'maxHealth' ? 'health' : 'mana'] += itemToBuy.value;
+                    game.player.inventory.push(`Used ${itemToBuy.name}`);
+                    
+                    speakSequence([
+                        `You buy and read the ${itemToBuy.name}.`,
+                        `Your ${itemToBuy.stat === 'maxHealth' ? 'Max Health' : 'Max Mana'} is permanently increased by ${itemToBuy.value}!`
+                    ]);
+                    
+                } else {
+                    game.player.gold -= itemToBuy.price;
+                    game.player.inventory.push(itemToBuy.name);
+                    speak(`You successfully bought a ${itemToBuy.name} for ${itemToBuy.price} gold. You now have ${game.player.gold} gold.`);
+                }
+            } else {
+                 speak('What would you like to do at the shop? Say "shop list" or "buy [item name]".');
+            }
+        }
+
+        function equipRing(command) {
+            let ringName = null;
+
+            if (command.indexOf('health') !== -1) ringName = 'Ring of Minor Health';
+            else if (command.indexOf('mana') !== -1) ringName = 'Ring of Minor Mana';
+            else if (command.indexOf('protection') !== -1) ringName = 'Ring of Protection';
+            
+            if (!ringName) {
+                speak('Which ring do you want to wear? Say the full name, like "wear ring of minor health."');
+                return;
+            }
+
+            const cleanRingName = ringName;
+            const ringIndex = game.player.inventory.findIndex(item => item === cleanRingName);
+
+            if (ringIndex === -1) {
+                speak(`You do not have a ${cleanRingName} in your inventory.`);
+                return;
+            }
+
+            if (game.player.inventory.some(item => item === `(E) ${cleanRingName}`)) {
+                speak(`You are already wearing the ${cleanRingName}.`);
+                return;
+            }
+
+            const ringData = rings.find(r => r.name === cleanRingName);
+
+            game.player.inventory.splice(ringIndex, 1);
+            game.player.inventory.push(`(E) ${cleanRingName}`);
+
+            let message = `You equip the ${cleanRingName}.`;
+
+            if (ringData.stat === 'maxHealth') {
+                game.player.maxHealth += ringData.value;
+                game.player.health = Math.min(game.player.maxHealth, game.player.health + ringData.value);
+                message += ` Your Max Health is permanently increased by ${ringData.value}!`;
+            } else if (ringData.stat === 'maxMana') {
+                game.player.maxMana += ringData.value;
+                game.player.mana = Math.min(game.player.maxMana, game.player.mana + ringData.value);
+                message += ` Your Max Mana is permanently increased by ${ringData.value}!`;
+            } else {
+                 message += ` It provides an unknown benefit (Defense: ${ringData.value}).`;
+            }
+
+            speak(message);
+        }
+
+        function useStairs() {
+            if (game.currentRoom.type === 'stairs') {
+                game.dungeon.currentLevel++;
+                
+                generateDungeon(); 
+
+                speak(`You descend the dark stairs to Dungeon Level ${game.dungeon.currentLevel}. A fresh chill runs down your spine.`, () => {
+                    describeRoom();
+                });
+            } else {
+                speak('There are no stairs here.');
+            }
+        }
+
+        function selectClass(className) {
+            const classData = classes[className];
+            game.player.class = className;
+            game.player.health = classData.health;
+            game.player.maxHealth = classData.maxHealth;
+            game.player.mana = classData.mana;
+            game.player.maxMana = classData.maxMana;
+            game.player.gold = classData.gold;
+            game.player.inventory = [...classData.items];
+            game.needsClass = false;
+            game.started = true;
+            game.phase = 'exploration';
+            
+            generateDungeon();
+            
+            speakSequence([
+                `You are now a ${classData.name}.`,
+                `Health: ${classData.health}.`,
+                `Mana: ${classData.mana}.`,
+                `Gold: ${classData.gold}.`,
+                `Your adventure begins on Dungeon Level 1!`
+            ], () => {
+                setTimeout(() => describeRoom(), 1000);
+            });
+        }
+
+        function generateDungeon() {
+            const size = game.dungeon.size;
+            const level = game.dungeon.currentLevel;
+            game.dungeon.grid = {};
+            
+            const centerX = 2; 
+            const centerY = 2;
+            
+            for (let x = 0; x < size; x++) {
+                for (let y = 0; y < size; y++) {
+                    const key = `${x},${y}`;
+                    const distanceX = Math.abs(x - centerX);
+                    const distanceY = Math.abs(y - centerY);
+                    const distanceFromCenter = distanceX + distanceY;
+                    
+                    let roomData = { visited: false, searched: false, hasChest: false };
+
+                    if (x === centerX && y === centerY) {
+                        game.dungeon.grid[key] = { type: 'entrance', description: level === 1 ? roomTypes.entrance.description : 'the stone landing where you descended the stairs.', hasEnemy: false, ...roomData };
+                    } else if (level === 1 && x === size - 1 && y === size - 1) { 
+                        game.dungeon.grid[key] = {
+                            type: 'boss',
+                            ...roomTypes.boss,
+                            ...roomData,
+                            hasChest: true,
+                            enemy: { ...enemies.dragon }
+                        };
+                    } else if (level === 1 && x === size - 1 && y === size - 2) { 
+                        game.dungeon.grid[key] = { type: 'stairs', ...roomTypes.stairs, ...roomData };
+                    } else if (level === 2 && x === 4 && y === 1) { 
+                        game.dungeon.grid[key] = { type: 'shop', ...roomTypes.shop, ...roomData }; 
+                    } else if (level >= 2 && x === size - 1 && y === size - 1) {
+                        game.dungeon.grid[key] = { type: 'stairs', ...roomTypes.stairs, ...roomData };
+                    } else {
+                        let isEnemy = false;
+                        let enemyType = null;
+                        
+                        let isInteresting = Math.random() < (level < 2 ? 0.7 : 0.8);
+
+                        if (level === 1) {
+                            if (distanceFromCenter >= 5) {
+                                isEnemy = Math.random() < 0.8;
+                                enemyType = Math.random() < 0.6 ? 'orc' : 'skeleton';
+                            } else if (distanceFromCenter >= 3) {
+                                isEnemy = Math.random() < 0.55;
+                                enemyType = Math.random() < 0.7 ? 'skeleton' : 'orc';
+                            } else if (distanceFromCenter >= 1) { 
+                                isEnemy = Math.random() < 0.3;
+                                enemyType = 'goblin';
+                            }
+                        } else if (level >= 2) {
+                            if (distanceFromCenter >= 5) {
+                                isEnemy = Math.random() < 0.85;
+                                enemyType = Math.random() < 0.4 ? 'wraith' : 'orc';
+                            } else if (distanceFromCenter >= 3) {
+                                isEnemy = Math.random() < 0.7;
+                                enemyType = Math.random() < 0.5 ? 'orc' : 'skeleton';
+                            } else if (distanceFromCenter >= 1) {
+                                isEnemy = Math.random() < 0.5;
+                                enemyType = 'skeleton';
+                            }
+                        }
+                        
+                        if (!isEnemy && isInteresting) {
+                            roomData.hasChest = Math.random() < 0.6;
+                        }
+
+                        if (isEnemy) {
+                            game.dungeon.grid[key] = {
+                                type: 'enemy',
+                                ...roomTypes.enemy,
+                                ...roomData,
+                                enemy: { ...enemies[enemyType] }
+                            };
+                        } else if (roomData.hasChest) {
+                            game.dungeon.grid[key] = {
+                                type: 'treasure',
+                                ...roomTypes.treasure,
+                                ...roomData
+                            };
+                        } else if (isInteresting && Math.random() < 0.1) {
+                            game.dungeon.grid[key] = {
+                                type: 'trap',
+                                ...roomTypes.trap,
+                                ...roomData
+                            };
+                        } else {
+                            game.dungeon.grid[key] = {
+                                type: 'empty',
+                                ...roomTypes.empty,
+                                ...roomData
+                            };
+                        }
+                    }
+                }
+            }
+            
+            game.player.position = { x: centerX, y: centerY };
+            game.currentRoom = game.dungeon.grid[`${centerX},${centerY}`];
+        }
+
+        function move(direction) {
+            const { x, y } = game.player.position;
+            let newX = x, newY = y;
+            
+            if (direction === 'north') newY--;
+            else if (direction === 'south') newY++;
+            else if (direction === 'east') newX++;
+            else if (direction === 'west') newX--;
+            
+            if (newX < 0 || newX >= game.dungeon.size || newY < 0 || newY >= game.dungeon.size) {
+                speak('You cannot go that way. There is a solid wall.');
+                return;
+            }
+            
+            game.player.position = { x: newX, y: newY };
+            const key = `${newX},${newY}`;
+            game.currentRoom = game.dungeon.grid[key];
+            
+            if (game.currentRoom.type === 'trap') {
+                if (!game.currentRoom.visited) {
+                    game.player.health -= 10;
+                    speak(`You step on a hidden pressure plate! You take 10 damage! Current health: ${game.player.health}.`);
+                    if (game.player.health <= 0) {
+                        setTimeout(() => gameOver(), 1000);
+                        return;
+                    }
+                }
+            }
+
+            game.currentRoom.visited = true;
+            describeRoom();
+        }
+
+        function describeRoom() {
+            const room = game.currentRoom;
+            const messages = [`You are on Level ${game.dungeon.currentLevel} in ${room.description}`];
+            
+            if (room.type === 'stairs') {
+                messages.push('You see a staircase leading down to the next level. Say "go down" to use it.');
+            } else if (room.type === 'shop') { 
+                 messages.push('A shady merchant looks up at you. Say "shop list" or "buy [item name]".');
+            } else if (room.hasEnemy && room.enemy && room.enemy.health > 0) {
+                messages.push(`A ${room.enemy.name} blocks your path!`);
+                speakSequence(messages, () => {
+                    setTimeout(() => startCombat(room.enemy), 1000);
+                });
+                return;
+            } else {
+                if (room.hasChest && !room.searched) {
+                    messages.push('You see a treasure chest here.');
+                }
+                if (!room.searched) {
+                    messages.push('You could search this room.');
+                }
+            }
+            messages.push('Which direction will you go?');
+            speakSequence(messages);
+        }
+
+        function determineLoot() {
+            const roll = Math.random();
+            if (roll < 0.5) { 
+                const item = Math.random() < 0.6 ? 'Health Potion' : 'Mana Potion';
+                return { type: 'item', item: item };
+            } else if (roll < 0.8) { 
+                const ring = rings[Math.floor(Math.random() * rings.length)];
+                return { type: 'ring', item: ring.name };
+            } else { 
+                const goldFound = Math.floor(Math.random() * 10) + 5; 
+                return { type: 'gold', amount: goldFound };
+            }
+        }
+
+        function searchRoom() {
+            const room = game.currentRoom;
+            
+            if (room.searched) {
+                speak('You already searched this room.');
+                return;
+            }
+            
+            room.searched = true;
+            
+            if (game.dungeon.hasSecretRoom && !game.dungeon.secretRoom && Math.random() < 0.15) {
+                game.dungeon.secretRoom = true;
+                speakSequence([
+                    'You found a secret passage!',
+                    'Inside, you discover a Ring of Minor Mana and a health potion!'
+                ]);
+                game.player.inventory.push('Ring of Minor Mana', 'Health Potion');
+            } else {
+                const loot = determineLoot();
+                if (loot.type === 'gold') {
+                    game.player.gold += loot.amount;
+                    speak(`You found ${loot.amount} gold hidden in the shadows.`);
+                } else if (loot.type === 'item') {
+                    game.player.inventory.push(loot.item);
+                    speak(`You found a hidden ${loot.item}!`);
+                } else if (loot.type === 'ring') {
+                    game.player.inventory.push(loot.item);
+                    speak(`You found a mystical ${loot.item}! You can equip it using 'wear ring'.`);
+                } else {
+                    speak('You search the room but find nothing.');
+                }
+            }
+        }
+
+        function openChest() {
+            const room = game.currentRoom;
+            
+            if (!room.hasChest) {
+                speak('There is no chest here.');
+                return;
+            }
+            
+            if (room.searched) {
+                speak('The chest is empty. You already looted it.');
+                return;
+            }
+            
+            room.searched = true;
+            
+            if (Math.random() < 0.1) {
+                speak('It is a mimic!');
+                const mimic = { name: 'Mimic', health: 45, damage: 12, gold: 15, fleeChance: 0.5 };
+                startCombat(mimic);
+            } else {
+                const loot1 = determineLoot();
+                const loot2 = determineLoot();
+                
+                let messages = ['You open the chest and find:'];
+                
+                if (loot1.type === 'gold') {
+                    game.player.gold += loot1.amount;
+                    messages.push(`${loot1.amount} gold.`);
+                } else if (loot1.type === 'item') {
+                    game.player.inventory.push(loot1.item);
+                    messages.push(`a ${loot1.item}.`);
+                } else if (loot1.type === 'ring') {
+                    game.player.inventory.push(loot1.item);
+                    messages.push(`a ${loot1.item}.`);
+                }
+
+                if (loot2.type === 'gold') {
+                    game.player.gold += loot2.amount;
+                    messages.push(`${loot2.amount} gold.`);
+                } else if (loot2.type === 'item') {
+                    game.player.inventory.push(loot2.item);
+                    messages.push(`a ${loot2.item}.`);
+                } else if (loot2.type === 'ring') {
+                    game.player.inventory.push(loot2.item);
+                    messages.push(`a ${loot2.item}.`);
+                }
+                
+                if (messages.length === 1) { messages.push('Nothing useful.'); }
+
+                speakSequence(messages);
+            }
+        }
+
+        function meditate() {
+            if (game.combat) {
+                speak('You cannot meditate during combat!');
+                return;
+            }
+            const manaRestored = 10;
+            const previousMana = game.player.mana;
+            
+            if (game.player.mana === game.player.maxMana) {
+                speak('You are already at full mana.');
+                return;
+            }
+
+            game.player.mana = Math.min(game.player.maxMana, game.player.mana + manaRestored);
+            const actualRestored = game.player.mana - previousMana;
+
+            speak(`You meditate for a moment and restore ${actualRestored} mana. Current mana: ${game.player.mana}.`);
+        }
+
+        function startCombat(enemy) {
+            game.combat = { enemy: { ...enemy }, playerDefending: false };
+            game.phase = 'combat';
+            
+            speakSequence([
+                `Combat begins!`,
+                `${enemy.name} has ${enemy.health} health.`,
+                `What will you do? Say attack, defend, special, use potion, or flee.`
+            ]);
+        }
+        
+        function processPotionCommand(command) {
+            let potionType = null;
+            
+            if (command.indexOf('health') !== -1 || command.indexOf('heal') !== -1) {
+                potionType = 'Health Potion';
+            } else if (command.indexOf('mana') !== -1) {
+                potionType = 'Mana Potion';
+            }
+            
+            if (!potionType) {
+                const healthIdx = game.player.inventory.indexOf('Health Potion');
+                const manaIdx = game.player.inventory.indexOf('Mana Potion');
+                
+                if (healthIdx !== -1 && game.player.health < game.player.maxHealth) {
+                    potionType = 'Health Potion';
+                } else if (manaIdx !== -1 && game.player.mana < game.player.maxMana) {
+                    potionType = 'Mana Potion';
+                } else if (healthIdx !== -1) {
+                    potionType = 'Health Potion';
+                } else if (manaIdx !== -1) {
+                    potionType = 'Mana Potion';
+                }
+            }
+            
+            if (potionType) {
+                usePotion(potionType);
+            } else {
+                speak('You have no usable potions, or I did not understand which one. Try saying "use health potion".');
+            }
+        }
+
+        function playerAttack() {
+            const baseDamage = 15;
+            const damage = baseDamage + Math.floor(Math.random() * 15);
+            game.combat.enemy.health -= damage;
+            
+            speakSequence([
+                `You attack for ${damage} damage!`,
+                `${game.combat.enemy.name} has ${Math.max(0, game.combat.enemy.health)} health left.`
+            ], () => {
+                if (game.combat.enemy.health <= 0) {
+                    setTimeout(() => combatVictory(), 1000);
+                } else {
+                    setTimeout(() => enemyTurn(), 1000);
+                }
+            });
+        }
+
+        function playerDefend() {
+            game.combat.playerDefending = true;
+            speak('You raise your guard.', () => {
+                setTimeout(() => enemyTurn(), 1000);
+            });
+        }
+
+        function playerSpecial() {
+            const classData = classes[game.player.class];
+            const special = classData.special;
+            
+            if (game.player.mana < special.cost) {
+                speak(`Not enough mana. You need ${special.cost}.`);
+                return;
+            }
+            
+            game.player.mana -= special.cost;
+            
+            if (special.type === 'damage') {
+                const damage = special.damage; 
+                game.combat.enemy.health -= damage;
+                
+                speakSequence([
+                    `You use ${special.name}!`,
+                    `${damage} damage!`,
+                    `${game.combat.enemy.name} has ${Math.max(0, game.combat.enemy.health)} health left.`
+                ], () => {
+                    if (game.combat.enemy.health <= 0) {
+                        setTimeout(() => combatVictory(), 1000);
+                    } else {
+                        setTimeout(() => enemyTurn(), 1000);
+                    }
+                });
+            }
+        }
+
+        function usePotion(potionType) {
+            
+            const idx = game.player.inventory.indexOf(potionType);
+            if (idx === -1) {
+                speak(`You do not have a ${potionType}.`);
+                return;
+            }
+            
+            game.player.inventory.splice(idx, 1);
+            
+            if (potionType === 'Health Potion') {
+                const heal = 40;
+                const healthBefore = game.player.health;
+                game.player.health = Math.min(game.player.maxHealth, game.player.health + heal);
+                const actualHeal = game.player.health - healthBefore;
+                
+                speak(`You drink a health potion and restore ${actualHeal} health. Health: ${game.player.health}.`, () => {
+                    setTimeout(() => enemyTurn(), 1000);
+                });
+            } else {
+                const restore = 30;
+                const manaBefore = game.player.mana;
+                game.player.mana = Math.min(game.player.maxMana, game.player.mana + restore);
+                const actualRestore = game.player.mana - manaBefore;
+                
+                speak(`You drink a mana potion and restore ${actualRestore} mana. Mana: ${game.player.mana}.`, () => {
+                    setTimeout(() => enemyTurn(), 1000);
+                });
+            }
+        }
+
+        function attemptFlee() {
+            const chance = game.combat.enemy.fleeChance;
+            const roll = Math.random();
+            
+            speak(`Attempting to flee...`, () => {
+                setTimeout(() => {
+                    if (roll < chance) {
+                        speak('You successfully escape!', () => {
+                            game.combat = null;
+                            game.phase = 'exploration';
+                            setTimeout(() => {
+                                const centerX = 2;
+                                const centerY = 2;
+                                game.player.position = { x: centerX, y: centerY };
+                                const key = `${centerX},${centerY}`;
+                                game.currentRoom = game.dungeon.grid[key];
+                                speak('You flee back to the entrance.');
+                            }, 1000);
+                        });
+                    } else {
+                        speak('You fail to escape!', () => {
+                            setTimeout(() => enemyTurn(), 1000);
+                        });
+                    }
+                }, 1000);
+            });
+        }
+
+        function enemyTurn() {
+            let damage = game.combat.enemy.damage;
+            
+            if (game.combat.playerDefending) {
+                damage = Math.floor(damage * 0.5);
+                game.combat.playerDefending = false;
+            }
+            
+            game.player.health -= damage;
+            
+            speakSequence([
+                `${game.combat.enemy.name} attacks for ${damage} damage!`,
+                `Your health: ${Math.max(0, game.player.health)}.`
+            ], () => {
+                if (game.player.health <= 0) {
+                    setTimeout(() => gameOver(), 1000);
+                } else {
+                    setTimeout(() => {
+                        speak('What will you do?');
+                    }, 500);
+                }
+            });
+        }
+
+        function gainXP(amount) {
+            const neededXP = game.player.level * 100;
+            game.player.xp += amount;
+            
+            if (game.player.xp >= neededXP) {
+                game.player.xp -= neededXP; 
+                levelUp();
+                return true;
+            }
+            return false;
+        }
+
+        function levelUp() {
+            game.player.level++;
+            
+            let healthGain = 0;
+            let manaGain = 0;
+            
+            if (game.player.class === 'warrior') {
+                healthGain = 20;
+                manaGain = 5;
+            } else if (game.player.class === 'mage') {
+                healthGain = 10;
+                manaGain = 20;
+            } else if (game.player.class === 'rogue') {
+                healthGain = 15;
+                manaGain = 10;
+            }
+            
+            game.player.maxHealth += healthGain;
+            game.player.health = game.player.maxHealth;
+            game.player.maxMana += manaGain;
+            game.player.mana = game.player.maxMana;
+
+            speakSequence([
+                `Congratulations! You have reached Level ${game.player.level}!`,
+                `Your Max Health increased by ${healthGain} to ${game.player.maxHealth}.`,
+                `Your Max Mana increased by ${manaGain} to ${game.player.maxMana}.`,
+                'Your health and mana have been fully restored!'
+            ]);
+        }
+
+        function combatVictory() {
+            const gold = game.combat.enemy.gold;
+            const xp = game.combat.enemy.xp;
+            
+            game.player.gold += gold;
+            const leveled = gainXP(xp);
+            
+            if (game.currentRoom.enemy) {
+                game.currentRoom.enemy.health = 0;
+            }
+            
+            let messages = [
+                `${game.combat.enemy.name} defeated!`,
+                `You gain ${gold} gold and ${xp} experience points!`,
+            ];
+
+            if (leveled) messages.push(`You leveled up!`);
+            
+            speakSequence(messages, () => {
+                game.combat = null;
+                game.phase = 'exploration';
+                
+                if (game.currentRoom.type === 'boss') {
+                    setTimeout(() => dungeonComplete(), 1500);
+                } else {
+                    setTimeout(() => speak('What will you do next?'), 1000);
+                }
+            });
+        }
+
+        function dungeonComplete() {
+            levelUp(); 
+            
+            speakSequence([
+                'You defeated the mighty Dragon!',
+                'You feel a surge of power, leveling up from this ultimate battle!',
+                'The path ahead is now open.',
+                `Final gold: ${game.player.gold}.`,
+                'You are victorious for now! Find the stairs to continue your journey.'
+            ]);
+        }
+
+        function gameOver() {
+            speakSequence([
+                'You have been defeated.',
+                'Your adventure ends here.',
+                `Final gold: ${game.player.gold}.`,
+                'Game over.'
+            ]);
+        }
+
+        function characterStatus() {
+            const classData = classes[game.player.class];
+            const special = classData.special;
+            const specialInfo = special.type === 'damage' ? `Deals ${special.damage} damage.` : `Restores ${special.heal} health.`;
+            const equippedRings = game.player.inventory.filter(i => i.startsWith('(E)'));
+            const neededXP = game.player.level * 100;
+
+            let messages = [
+                `Level ${game.player.level} ${classData.name}.`,
+                `Health: ${game.player.health} of ${game.player.maxHealth}.`,
+                `Mana: ${game.player.mana} of ${game.player.maxMana}.`,
+                `Experience: ${game.player.xp} of ${neededXP} to the next level.`,
+                `Special ability: ${special.name}. Costs ${special.cost} mana. ${specialInfo}`,
+                `Gold: ${game.player.gold}.`,
+            ];
+
+            if (equippedRings.length > 0) {
+                messages.push(`Equipped: ${equippedRings.join(', ').replace(/\(E\)\s*/g, '')}.`);
+            } else {
+                 messages.push(`Equipped: Nothing.`);
+            }
+
+            speakSequence(messages);
+        }
+
+        function listInventory() {
+            if (game.player.inventory.length === 0) {
+                speak(`Empty inventory. Gold: ${game.player.gold}.`);
+            } else {
+                const healthPotions = game.player.inventory.filter(i => i === 'Health Potion').length;
+                const manaPotions = game.player.inventory.filter(i => i === 'Mana Potion').length;
+                const ringsList = game.player.inventory.filter(i => rings.some(r => r.name === i) || i.startsWith('(E)'));
+                const manuals = game.player.inventory.filter(i => i.startsWith('Used Manual'));
+                const otherItems = game.player.inventory.filter(i => i !== 'Health Potion' && i !== 'Mana Potion' && !ringsList.includes(i) && !manuals.includes(i));
+                
+                const messages = ['Inventory:'];
+                if (healthPotions > 0) messages.push(`${healthPotions} health potion${healthPotions > 1 ? 's' : ''}.`);
+                if (manaPotions > 0) messages.push(`${manaPotions} mana potion${manaPotions > 1 ? 's' : ''}.`);
+                if (ringsList.length > 0) messages.push(`Rings: ${ringsList.join(', ')}.`);
+                 if (manuals.length > 0) messages.push(`Manuals: ${manuals.join(', ')}.`);
+                if (otherItems.length > 0) messages.push(otherItems.join(', ') + '.');
+                messages.push(`Gold: ${game.player.gold}.`);
+                
+                speakSequence(messages);
+            }
+        }
+
+        function showHelp() {
+            if (game.phase === 'combat') {
+                speak('Combat commands: attack, defend, special, use potion, or flee.');
+            } else if (game.currentRoom.type === 'shop') {
+                speak('Shop commands: buy [item name], shop list.');
+            } else {
+                speak('Exploration commands: north, south, east, west, look around, search, open chest, meditate, wear ring, go down (if stairs are present), status, inventory, save game, load game, or help.');
+            }
+        }
+
+        function listCommands() {
+            if (game.phase === 'combat') {
+                speakSequence([
+                    'Combat commands:',
+                    'Attack. Deal damage.',
+                    'Defend. Reduce incoming damage.',
+                    'Special. Use your class ability.',
+                    'Use potion. Heal or restore mana.',
+                    'Flee. Try to escape.'
+                ]);
+            } else {
+                let messages = [
+                    'Movement: north, south, east, west, go down (for stairs).',
+                    'Actions: look around, search, open chest, meditate, wear ring.',
+                    'Info: status, inventory, hint.',
+                ];
+                if (game.currentRoom.type === 'shop') {
+                    messages.push('Shop: shop list, buy [item name].');
+                }
+                messages.push('System: save game, load game, commands.');
+
+                speakSequence(messages);
+            }
+        }
+
+        function giveHint() {
+            if (game.phase === 'combat') {
+                if (game.player.health < 30) {
+                    speak('Your health is low. Consider using a health potion or defending.');
+                } else if (game.player.mana >= classes[game.player.class].special.cost) {
+                    speak(`You have enough mana for ${classes[game.player.class].special.name}.`);
+                } else {
+                    speak('Try attacking or defending based on your health.');
+                }
+            } else {
+                const room = game.currentRoom;
+                if (room.type === 'stairs') {
+                     speak('A staircase is here. Say "go down" to descend to the next level.');
+                } else if (room.type === 'shop') {
+                     speak('You are at the shop. Say "shop list" to see what the merchant sells.');
+                } else if (room.hasChest && !room.searched) {
+                    speak('There is a chest here. Say open chest.');
+                } else if (!room.searched) {
+                    speak('You have not searched this room yet. Try searching.');
+                } else if (game.player.mana < game.player.maxMana * 0.5) {
+                    speak('Your mana is low. Consider saying meditate to recover.');
+                } else if (room.type === 'boss') {
+                    speak('This is a boss room. Be prepared for a tough fight.');
+                } else {
+                    speak('Explore in different directions. The deepest part of the dungeon is at the far south and east (bottom right corner).');
+                }
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
-            micButton.addEventListener('click', handleClick);
-            micButton.addEventListener('contextmenu', (e) => e.preventDefault());
+            checkBrowserSupport();
+            setTimeout(() => {
+                speak('Echo Dungeon is ready. Tap the screen to begin.');
+            }, 1000);
         });
+
+        micButton.addEventListener('contextmenu', (e) => e.preventDefault());
     </script>
 </body>
 </html>
